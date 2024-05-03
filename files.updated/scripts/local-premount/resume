@@ -1,0 +1,99 @@
+#!/bin/sh
+
+PREREQ=""
+
+prereqs()
+{
+	echo "$PREREQ"
+}
+
+echo cdx: resume: $*
+case $1 in
+# get pre-requisites
+prereqs)
+	prereqs
+	exit 0
+	;;
+esac
+
+echo cdx: resume: resume=$resume
+echo cdx: resume: `ls -l /sys/power/resume`
+if [ -z "${resume?}" ] || [ ! -e /sys/power/resume ]; then
+	exit 0
+fi
+
+. /scripts/functions
+. /scripts/local
+
+PAGE_SIZE=4096
+if [ -x /bin/getconf ]; then
+	PAGE_SIZE=$(getconf PAGESIZE)
+fi
+export PAGE_SIZE
+
+if ! local_device_setup "${resume}" "suspend/resume device" false; then
+	echo cdx: resume: local_device_setup failed
+	exit 0
+fi
+
+DEV=$(readlink -f "$resume")
+echo cdx: resume: DEV=$DEV
+DEV=/sys/class/block/${DEV##*/}/dev
+echo cdx: resume: DEV2=$DEV
+
+set -x
+if [ -r "$DEV" ]; then
+        read -r MAJMIN < "$DEV"
+	echo cdx: resume: MAJMIN=$MAJMIN
+fi
+if [ -z "$MAJMIN" ]; then
+	echo cdx: resume: fails due to MAJMIN being empty
+        exit 1
+fi
+
+echo cdx: resume: resume_offset=$resume_offset
+
+if [ "${resume_offset?}" -ge 0 ] 2>/dev/null; then
+	offset_option=$((${resume_offset?} * PAGE_SIZE))
+	echo cdx: resume: offset_option=$offset_option
+	SWAPTYPE=$(blkid -p -O ${offset_option} "${resume}" -s TYPE -o value)
+	echo cdx: resume: SWAPTYPE1=$SWAPTYPE
+	MAJMIN="${MAJMIN}:${resume_offset?}"
+	echo cdx: resume: MAJMIN2=$MAJMIN
+else
+	SWAPTYPE=$(blkid -p -o value -s TYPE "$resume")
+	echo cdx: resume: SWAPTYPE2=$SWAPTYPE
+fi
+
+use_plymouth=false
+if command -v plymouth >/dev/null && plymouth --ping; then
+	use_plymouth=true
+	echo cdx: resume: use_plymouth=true
+fi
+
+sleep 10
+case "${SWAPTYPE}" in
+    swsuspend|s1suspend|s2suspend|ulsuspend|tuxonice)
+	if "$use_plymouth"; then
+		plymouth message --text="Resuming from $resume"
+
+		# The above command does not wait for a framebuffer update to
+		# complete, so the kernel can freeze the framebuffer before
+		# the message is even visible.  Wait just a moment to make
+		# that less likely.
+		sleep 0.1
+	fi
+
+	echo cdx: resume: MAJMIN3=$MAJMIN
+	sleep 10
+
+	echo "${MAJMIN}" > /sys/power/resume
+	echo cdx: resume: MAJMIN4=$MAJMIN
+	;;
+esac
+
+if "$use_plymouth"; then
+	# plymouth hide-message does not work yet
+	plymouth display-message --text=""
+fi
+set -x
