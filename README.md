@@ -1,0 +1,1 @@
+# debug-hibernation-initrd
